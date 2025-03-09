@@ -1,0 +1,159 @@
+version: "3.9"
+
+services:
+  frigate:
+    container_name: frigate
+    restart: unless-stopped
+    privileged: false
+    security_opt:
+      - no-new-privileges:true
+    image: ghcr.io/blakeblackshear/frigate:stable
+    shm_size: 1g
+    environment:
+      FRIGATE_RTSP_PASSWORD: ${FRIGATE_RTSP_PASSWORD}
+      TZ: ${TIMEZONE}
+      MQTT_HOST: ${MQTT_HOST}
+      MQTT_PORT: ${MQTT_PORT}
+      MQTT_USERNAME: ${MQTT_USERNAME}
+      MQTT_PASSWORD: ${MQTT_PASSWORD}
+      PLUS_API_KEY: ${PLUS_API_KEY}
+    devices:
+      - /dev/apex_0:/dev/apex_0
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /Volume2/surveillance/frigate/config:/config:rw
+      - /Volume2/surveillance:/media/frigate:rw
+      - type: tmpfs
+        target: /tmp/cache
+        tmpfs:
+          size: 1g
+    ports:
+      - "8971:8971"
+      - "5000:5000"
+      - "8554:8554"
+      - "8555:8555/tcp"
+      - "8555:8555/udp"
+    networks:
+      - surveillance_net
+
+  double-take:
+    image: skrashevich/double-take
+    container_name: double-take
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    volumes:
+      - /Volume2/surveillance/double-take:/.storage
+    environment:
+      MQTT_HOST: ${MQTT_HOST}
+      MQTT_USERNAME: ${MQTT_USERNAME}
+      MQTT_PASSWORD: ${MQTT_PASSWORD}
+      MQTT_PORT: ${MQTT_PORT}
+      TZ: ${TIMEZONE}
+    networks:
+      - surveillance_net
+    depends_on:
+      - frigate
+      - compreface-api
+
+  compreface-postgres-db:
+    image: postgres:13
+    restart: unless-stopped
+    container_name: "compreface-postgres-db"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - /Volume2/surveillance/compreface-db:/var/lib/postgresql/data
+    networks:
+      - surveillance_net
+
+  compreface-redis:
+    image: redis:6.2
+    container_name: "compreface-redis"
+    restart: unless-stopped
+    volumes:
+      - /Volume2/surveillance/compreface-redis:/data
+    networks:
+      - surveillance_net
+
+  compreface-admin:
+    image: exadel/compreface-admin:latest
+    restart: unless-stopped
+    container_name: "compreface-admin"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_URL: jdbc:postgresql://compreface-postgres-db:5432/${POSTGRES_DB}
+      SPRING_PROFILES_ACTIVE: dev
+      ENABLE_EMAIL_SERVER: false
+      ADMIN_JAVA_OPTS: "-Xms256m -Xmx512m"
+      MAX_FILE_SIZE: 50MB
+      MAX_REQUEST_SIZE: 50MB
+    depends_on:
+      - compreface-postgres-db
+      - compreface-api
+    networks:
+      - surveillance_net
+
+  compreface-api:
+    image: exadel/compreface-api:latest
+    restart: unless-stopped
+    container_name: "compreface-api"
+    depends_on:
+      - compreface-postgres-db
+      - compreface-redis
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_URL: jdbc:postgresql://compreface-postgres-db:5432/${POSTGRES_DB}
+      REDIS_URL: redis://compreface-redis:6379
+      SPRING_PROFILES_ACTIVE: dev
+      API_JAVA_OPTS: "-Xms512m -Xmx1024m"
+      SAVE_IMAGES_TO_DB: false
+      MAX_FILE_SIZE: 50MB
+      MAX_REQUEST_SIZE: 50MB
+      CONNECTION_TIMEOUT: 10000
+      READ_TIMEOUT: 60000
+    networks:
+      - surveillance_net
+
+  compreface-fe:
+    image: exadel/compreface-fe:latest
+    restart: unless-stopped
+    container_name: "compreface-ui"
+    ports:
+      - "8000:80"
+    depends_on:
+      - compreface-api
+      - compreface-admin
+    environment:
+      CLIENT_MAX_BODY_SIZE: 50m
+      PROXY_READ_TIMEOUT: 60000ms
+      PROXY_CONNECT_TIMEOUT: 10000ms
+    networks:
+      - surveillance_net
+
+  compreface-core:
+    image: exadel/compreface-core:latest
+    restart: unless-stopped
+    container_name: "compreface-core"
+    privileged: false
+    environment:
+      ML_PORT: 3000
+      IMG_LENGTH_LIMIT: 1024
+      UWSGI_PROCESSES: 2
+      UWSGI_THREADS: 1
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/healthcheck"]
+      interval: 10s
+      retries: 3
+      start_period: 5s
+      timeout: 2s
+    networks:
+      - surveillance_net
+
+networks:
+  surveillance_net:
+    driver: bridge

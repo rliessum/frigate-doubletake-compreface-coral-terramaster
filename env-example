@@ -1,0 +1,11 @@
+# Environment variables
+FRIGATE_RTSP_PASSWORD=your_secure_password
+TIMEZONE=Europe/Amsterdam
+MQTT_HOST=192.168.42.42
+MQTT_PORT=1883
+MQTT_USERNAME=mqtt
+MQTT_PASSWORD=mqttuser
+PLUS_API_KEY=your_api_key_here
+POSTGRES_USER=compreface
+POSTGRES_PASSWORD=compreface_password
+POSTGRES_DB=compreface
